@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "snake-game"
+version = "0.1.0"
+description = "Dummy Pygame snake demo for a vibe-coding workshop."
+authors = ["Polterageist <unknown@example.com>"]
+readme = "README.md"
+packages = [{ include = "snake_game", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.13"
+pygame = "^2.6.0"
+
+[tool.poetry.scripts]
+snake-demo = "snake_game.__main__:main"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
