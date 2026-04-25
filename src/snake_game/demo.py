@@ -3,8 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import random
 
 import pygame
+
+from snake_game.logic import (
+    Direction,
+    GameState,
+    bounds_tiles,
+    spawn_apple,
+    step,
+)
 
 
 @dataclass(frozen=True)
@@ -17,7 +26,8 @@ class DemoConfig:
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    # demo.py -> snake_game/ (0), src/ (1), snake/ (2)
+    return Path(__file__).resolve().parents[2]
 
 
 def _assets_dir() -> Path:
@@ -51,6 +61,107 @@ def _draw_checkerboard(
             )
 
 
+def _new_game_state(config: DemoConfig, *, rng: random.Random) -> GameState:
+    width_tiles = config.width // config.tile
+    height_tiles = config.height // config.tile
+    bounds = bounds_tiles(width_tiles=width_tiles, height_tiles=height_tiles)
+
+    # Start in the middle, heading right.
+    cx = width_tiles // 2
+    cy = height_tiles // 2
+    snake = ((cx, cy), (cx - 1, cy), (cx - 2, cy), (cx - 3, cy))
+    apple = spawn_apple(rng, occupied=snake, bounds=bounds)
+
+    return GameState(
+        snake=snake,
+        direction=Direction.RIGHT,
+        apple=apple,
+        bounds=bounds,
+        game_over=False,
+        score=0,
+    )
+
+
+def _dir_from_key(key: int) -> Direction | None:
+    if key == pygame.K_UP:
+        return Direction.UP
+    if key == pygame.K_DOWN:
+        return Direction.DOWN
+    if key == pygame.K_LEFT:
+        return Direction.LEFT
+    if key == pygame.K_RIGHT:
+        return Direction.RIGHT
+    return None
+
+
+def _draw_tile(
+    screen: pygame.Surface,
+    *,
+    sprites: dict[str, pygame.Surface | None],
+    kind: str,
+    tx: int,
+    ty: int,
+    tile: int,
+) -> None:
+    x, y = tx * tile, ty * tile
+    sprite = sprites.get(kind)
+    if sprite is None:
+        if kind == "apple":
+            pygame.draw.circle(
+                screen,
+                pygame.Color(231, 76, 60),
+                (x + tile // 2, y + tile // 2),
+                tile // 2 - 3,
+            )
+            return
+
+        pygame.draw.rect(
+            screen,
+            pygame.Color(92, 184, 92),
+            pygame.Rect(x + 2, y + 2, tile - 4, tile - 4),
+            border_radius=6,
+        )
+        return
+
+    screen.blit(sprite, (x, y))
+
+
+def _draw_walls(
+    screen: pygame.Surface,
+    *,
+    wall: pygame.Surface | None,
+    config: DemoConfig,
+) -> None:
+    if wall is None:
+        return
+
+    w_tiles = config.width // config.tile
+    h_tiles = config.height // config.tile
+
+    for tx in range(0, w_tiles):
+        screen.blit(wall, (tx * config.tile, 0))
+        screen.blit(wall, (tx * config.tile, (h_tiles - 1) * config.tile))
+    for ty in range(0, h_tiles):
+        screen.blit(wall, (0, ty * config.tile))
+        screen.blit(wall, ((w_tiles - 1) * config.tile, ty * config.tile))
+
+
+def _draw_overlay(
+    screen: pygame.Surface,
+    *,
+    config: DemoConfig,
+    text: str,
+    font: pygame.font.Font,
+) -> None:
+    overlay = pygame.Surface((config.width, config.height), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 160))
+    screen.blit(overlay, (0, 0))
+
+    rendered = font.render(text, True, pygame.Color(240, 240, 240))
+    rect = rendered.get_rect(center=(config.width // 2, config.height // 2))
+    screen.blit(rendered, rect)
+
+
 def run(config: DemoConfig | None = None) -> None:
     config = config or DemoConfig()
 
@@ -59,6 +170,7 @@ def run(config: DemoConfig | None = None) -> None:
         screen = pygame.display.set_mode((config.width, config.height))
         pygame.display.set_caption(config.caption)
         clock = pygame.time.Clock()
+        font = pygame.font.Font(None, 36)
 
         tile_size = (config.tile, config.tile)
         assets = _assets_dir()
@@ -71,13 +183,13 @@ def run(config: DemoConfig | None = None) -> None:
             "wall": _load_image(assets / "wall.png", tile_size),
         }
 
-        snake_tiles = [
-            ("head", (6, 6)),
-            ("body", (5, 6)),
-            ("body", (4, 6)),
-            ("tail", (3, 6)),
-        ]
-        apple_tile = ("apple", (10, 6))
+        rng = random.Random()
+        state = _new_game_state(config, rng=rng)
+        pending_turn: Direction | None = None
+
+        move_hz = 10
+        move_interval_ms = int(1000 / move_hz)
+        acc_ms = 0
 
         autoclose_seconds: float | None = None
         raw_autoclose = os.getenv("SNAKE_DEMO_AUTOCLOSE_SECONDS")
@@ -91,11 +203,31 @@ def run(config: DemoConfig | None = None) -> None:
 
         running = True
         while running:
+            dt_ms = clock.tick(config.fps)
+            acc_ms += dt_ms
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     running = False
+                elif event.type == pygame.KEYDOWN and event.key in (
+                    pygame.K_RETURN,
+                    pygame.K_SPACE,
+                ):
+                    if state.game_over:
+                        state = _new_game_state(config, rng=rng)
+                        pending_turn = None
+                        acc_ms = 0
+                elif event.type == pygame.KEYDOWN:
+                    desired = _dir_from_key(event.key)
+                    if desired is not None and not state.game_over:
+                        pending_turn = desired
+
+            while not state.game_over and acc_ms >= move_interval_ms:
+                state = step(state, pending_turn=pending_turn, rng=rng)
+                pending_turn = None
+                acc_ms -= move_interval_ms
 
             _draw_checkerboard(
                 screen,
@@ -104,54 +236,52 @@ def run(config: DemoConfig | None = None) -> None:
                 color_b=pygame.Color(20, 23, 35),
             )
 
-            for kind, (tx, ty) in snake_tiles:
-                x, y = tx * config.tile, ty * config.tile
-                sprite = sprites.get(kind)
-                if sprite is None:
-                    pygame.draw.rect(
-                        screen,
-                        pygame.Color(92, 184, 92),
-                        pygame.Rect(
-                            x + 2,
-                            y + 2,
-                            config.tile - 4,
-                            config.tile - 4,
-                        ),
-                        border_radius=6,
-                    )
-                else:
-                    screen.blit(sprite, (x, y))
+            # Apple.
+            ax, ay = state.apple
+            _draw_tile(
+                screen,
+                sprites=sprites,
+                kind="apple",
+                tx=ax,
+                ty=ay,
+                tile=config.tile,
+            )
 
-            kind, (tx, ty) = apple_tile
-            x, y = tx * config.tile, ty * config.tile
-            sprite = sprites.get(kind)
-            if sprite is None:
-                pygame.draw.circle(
+            # Snake.
+            for idx, (tx, ty) in enumerate(state.snake):
+                kind = "body"
+                if idx == 0:
+                    kind = "head"
+                elif idx == len(state.snake) - 1:
+                    kind = "tail"
+
+                _draw_tile(
                     screen,
-                    pygame.Color(231, 76, 60),
-                    (x + config.tile // 2, y + config.tile // 2),
-                    config.tile // 2 - 3,
+                    sprites=sprites,
+                    kind=kind,
+                    tx=tx,
+                    ty=ty,
+                    tile=config.tile,
                 )
-            else:
-                screen.blit(sprite, (x, y))
 
-            wall = sprites.get("wall")
-            if wall is not None:
-                for tx in range(0, config.width // config.tile):
-                    screen.blit(wall, (tx * config.tile, 0))
-                    screen.blit(
-                        wall,
-                        (tx * config.tile, config.height - config.tile),
-                    )
-                for ty in range(0, config.height // config.tile):
-                    screen.blit(wall, (0, ty * config.tile))
-                    screen.blit(
-                        wall,
-                        (config.width - config.tile, ty * config.tile),
-                    )
+            _draw_walls(screen, wall=sprites.get("wall"), config=config)
+
+            score_text = font.render(
+                f"Score: {state.score}",
+                True,
+                pygame.Color(220, 220, 220),
+            )
+            screen.blit(score_text, (12, 12))
+
+            if state.game_over:
+                _draw_overlay(
+                    screen,
+                    config=config,
+                    text="Game Over — press Enter/Space to restart",
+                    font=font,
+                )
 
             pygame.display.flip()
-            clock.tick(config.fps)
 
             if autoclose_seconds is not None:
                 elapsed_ms = pygame.time.get_ticks() - start_ms
