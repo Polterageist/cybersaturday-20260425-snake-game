@@ -16,3 +16,6 @@ env/
 
 *.log
 
+# Local runtime data
+scores.json
+

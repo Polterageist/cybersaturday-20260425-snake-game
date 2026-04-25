@@ -12,8 +12,11 @@ from snake_game.logic import (
     GameState,
     bounds_tiles,
     spawn_apple,
+    spawn_apple_with_walls,
     step,
 )
+from snake_game.level import generate_walls
+from snake_game.highscores import ScoreEntry, load_scores, record_score, save_scores
 
 
 @dataclass(frozen=True)
@@ -70,13 +73,15 @@ def _new_game_state(config: DemoConfig, *, rng: random.Random) -> GameState:
     cx = width_tiles // 2
     cy = height_tiles // 2
     snake = ((cx, cy), (cx - 1, cy), (cx - 2, cy), (cx - 3, cy))
-    apple = spawn_apple(rng, occupied=snake, bounds=bounds)
+    walls = generate_walls(rng, bounds=bounds, occupied=snake)
+    apple = spawn_apple_with_walls(rng, occupied=snake, bounds=bounds, walls=walls)
 
     return GameState(
         snake=snake,
         direction=Direction.RIGHT,
         apple=apple,
         bounds=bounds,
+        walls=walls,
         game_over=False,
         score=0,
     )
@@ -146,6 +151,19 @@ def _draw_walls(
         screen.blit(wall, ((w_tiles - 1) * config.tile, ty * config.tile))
 
 
+def _draw_internal_walls(
+    screen: pygame.Surface,
+    *,
+    wall: pygame.Surface | None,
+    walls: frozenset[tuple[int, int]],
+    tile: int,
+) -> None:
+    if wall is None:
+        return
+    for tx, ty in walls:
+        screen.blit(wall, (tx * tile, ty * tile))
+
+
 def _draw_overlay(
     screen: pygame.Surface,
     *,
@@ -157,9 +175,18 @@ def _draw_overlay(
     overlay.fill((0, 0, 0, 160))
     screen.blit(overlay, (0, 0))
 
-    rendered = font.render(text, True, pygame.Color(240, 240, 240))
-    rect = rendered.get_rect(center=(config.width // 2, config.height // 2))
-    screen.blit(rendered, rect)
+    lines = text.splitlines() or [""]
+    rendered_lines = [
+        font.render(line, True, pygame.Color(240, 240, 240)) for line in lines
+    ]
+
+    line_height = font.get_linesize()
+    total_h = line_height * len(rendered_lines)
+    y = (config.height - total_h) // 2
+    for rendered in rendered_lines:
+        rect = rendered.get_rect(centerx=(config.width // 2), y=y + line_height // 2)
+        screen.blit(rendered, rect)
+        y += line_height
 
 
 def run(config: DemoConfig | None = None) -> None:
@@ -181,13 +208,23 @@ def run(config: DemoConfig | None = None) -> None:
             "tail": _load_image(assets / "tail.png", tile_size),
             "apple": _load_image(assets / "apple.png", tile_size),
             "wall": _load_image(assets / "wall.png", tile_size),
+            "box": _load_image(assets / "box.png", tile_size),
         }
 
         rng = random.Random()
+        scores_path = _repo_root() / "scores.json"
+        highscores = load_scores(scores_path)
+
         state = _new_game_state(config, rng=rng)
         pending_turn: Direction | None = None
+        name_input = ""
+        score_saved_for_round = False
 
-        move_hz = 10
+        base_move_hz = 10.0
+        move_hz_per_score = 0.75
+        max_move_hz = 25.0
+
+        move_hz = base_move_hz
         move_interval_ms = int(1000 / move_hz)
         acc_ms = 0
 
@@ -209,25 +246,56 @@ def run(config: DemoConfig | None = None) -> None:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    running = False
-                elif event.type == pygame.KEYDOWN and event.key in (
-                    pygame.K_RETURN,
-                    pygame.K_SPACE,
-                ):
-                    if state.game_over:
-                        state = _new_game_state(config, rng=rng)
-                        pending_turn = None
-                        acc_ms = 0
                 elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                        continue
+
+                    if state.game_over:
+                        if not score_saved_for_round:
+                            if event.key == pygame.K_BACKSPACE:
+                                name_input = name_input[:-1]
+                                continue
+                            if event.key == pygame.K_RETURN:
+                                highscores = record_score(
+                                    highscores,
+                                    name=name_input,
+                                    score=state.score,
+                                    limit=10,
+                                )
+                                save_scores(scores_path, highscores)
+                                score_saved_for_round = True
+                                continue
+
+                            ch = getattr(event, "unicode", "")
+                            if isinstance(ch, str) and ch and ch.isprintable():
+                                if ch not in "\r\n\t":
+                                    if len(name_input) < 16:
+                                        name_input += ch
+                            continue
+
+                        if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                            state = _new_game_state(config, rng=rng)
+                            pending_turn = None
+                            acc_ms = 0
+                            move_hz = base_move_hz
+                            move_interval_ms = int(1000 / move_hz)
+                            name_input = ""
+                            score_saved_for_round = False
+                        continue
+
                     desired = _dir_from_key(event.key)
                     if desired is not None and not state.game_over:
                         pending_turn = desired
 
             while not state.game_over and acc_ms >= move_interval_ms:
+                prev_score = state.score
                 state = step(state, pending_turn=pending_turn, rng=rng)
                 pending_turn = None
                 acc_ms -= move_interval_ms
+                if state.score != prev_score:
+                    move_hz = min(max_move_hz, base_move_hz + state.score * move_hz_per_score)
+                    move_interval_ms = max(1, int(1000 / move_hz))
 
             _draw_checkerboard(
                 screen,
@@ -265,6 +333,12 @@ def run(config: DemoConfig | None = None) -> None:
                 )
 
             _draw_walls(screen, wall=sprites.get("wall"), config=config)
+            _draw_internal_walls(
+                screen,
+                wall=(sprites.get("box") or sprites.get("wall")),
+                walls=state.walls,
+                tile=config.tile,
+            )
 
             score_text = font.render(
                 f"Score: {state.score}",
@@ -274,10 +348,22 @@ def run(config: DemoConfig | None = None) -> None:
             screen.blit(score_text, (12, 12))
 
             if state.game_over:
+                top_lines = ["High scores:"]
+                for idx, entry in enumerate(highscores[:10], start=1):
+                    top_lines.append(f"{idx:>2}. {entry.name} — {entry.score}")
+
+                if not score_saved_for_round:
+                    prompt = f"Name: {name_input or ''}_ (Enter to save)"
+                else:
+                    prompt = "Saved. Press Enter/Space to restart"
+
                 _draw_overlay(
                     screen,
                     config=config,
-                    text="Game Over — press Enter/Space to restart",
+                    text="Game Over\n"
+                    + "\n".join(top_lines)
+                    + "\n\n"
+                    + prompt,
                     font=font,
                 )
 

@@ -4,7 +4,15 @@ import random
 
 import pytest
 
-from snake_game.logic import Direction, GameState, bounds_tiles, spawn_apple, step, turn
+from snake_game.logic import (
+    Direction,
+    GameState,
+    bounds_tiles,
+    spawn_apple,
+    spawn_apple_with_walls,
+    step,
+    turn,
+)
 
 def test_turn_prevents_reverse() -> None:
     assert turn(Direction.RIGHT, Direction.LEFT) == Direction.RIGHT
@@ -22,6 +30,7 @@ def test_step_moves_forward_without_growing() -> None:
         direction=Direction.RIGHT,
         apple=(10, 10),
         bounds=((1, 1), (20, 20)),
+        walls=frozenset(),
         game_over=False,
         score=0,
     )
@@ -39,6 +48,7 @@ def test_step_eats_apple_and_grows_and_scores() -> None:
         direction=Direction.RIGHT,
         apple=(4, 3),
         bounds=((1, 1), (6, 6)),
+        walls=frozenset(),
         game_over=False,
         score=0,
     )
@@ -56,6 +66,7 @@ def test_step_wall_collision_sets_game_over() -> None:
         direction=Direction.UP,
         apple=(10, 10),
         bounds=((1, 1), (20, 20)),
+        walls=frozenset(),
         game_over=False,
         score=0,
     )
@@ -71,6 +82,7 @@ def test_step_self_collision_sets_game_over() -> None:
         direction=Direction.LEFT,
         apple=(10, 10),
         bounds=((1, 1), (20, 20)),
+        walls=frozenset(),
         game_over=False,
         score=0,
     )
@@ -88,6 +100,29 @@ def test_spawn_apple_only_in_interior_and_not_on_occupied() -> None:
     assert min_xy[0] <= apple[0] <= max_xy[0]
     assert min_xy[1] <= apple[1] <= max_xy[1]
     assert apple not in occupied
+
+
+def test_spawn_apple_not_on_walls() -> None:
+    rng = random.Random(0)
+    bounds = ((1, 1), (3, 3))
+    walls = {(2, 2), (3, 3)}
+    apple = spawn_apple_with_walls(rng, occupied=(), bounds=bounds, walls=walls)
+    assert apple not in walls
+
+
+def test_step_wall_collision_internal_wall_sets_game_over() -> None:
+    state = GameState(
+        snake=((2, 2), (1, 2), (1, 1)),
+        direction=Direction.RIGHT,
+        apple=(10, 10),
+        bounds=((1, 1), (20, 20)),
+        walls=frozenset({(3, 2)}),
+        game_over=False,
+        score=0,
+    )
+
+    nxt = step(state)
+    assert nxt.game_over is True
 
 
 def test_spawn_apple_raises_when_no_space() -> None:

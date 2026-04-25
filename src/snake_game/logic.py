@@ -26,6 +26,7 @@ class GameState:
     direction: Direction
     apple: Vec2
     bounds: Bounds
+    walls: frozenset[Vec2]
     game_over: bool
     score: int
 
@@ -55,7 +56,18 @@ def turn(current: Direction, desired: Direction) -> Direction:
 
 
 def spawn_apple(rng: random.Random, *, occupied: Iterable[Vec2], bounds: Bounds) -> Vec2:
+    return spawn_apple_with_walls(rng, occupied=occupied, bounds=bounds, walls=())
+
+
+def spawn_apple_with_walls(
+    rng: random.Random,
+    *,
+    occupied: Iterable[Vec2],
+    bounds: Bounds,
+    walls: Iterable[Vec2],
+) -> Vec2:
     occ = set(occupied)
+    occ.update(walls)
     (min_x, min_y), (max_x, max_y) = bounds
     free: list[Vec2] = [
         (x, y)
@@ -86,12 +98,19 @@ def step(
 
     if not _is_in_bounds(new_head, state.bounds):
         return replace(state, direction=direction, game_over=True)
+    if new_head in state.walls:
+        return replace(state, direction=direction, game_over=True)
 
     ate = new_head == state.apple
     if ate:
         new_snake = (new_head,) + state.snake
         rng = rng or random.Random()
-        new_apple = spawn_apple(rng, occupied=new_snake, bounds=state.bounds)
+        new_apple = spawn_apple_with_walls(
+            rng,
+            occupied=new_snake,
+            bounds=state.bounds,
+            walls=state.walls,
+        )
         return replace(
             state,
             snake=new_snake,

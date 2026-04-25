@@ -1,8 +1,13 @@
 # Snake (Pygame) — demo repo
 
-This repository is a **workshop demo project**: a minimal Pygame window that renders a static “snake” placeholder using the sprites in `assets/`.
+This repository is a **workshop demo project**: a minimal Snake game in Pygame using the sprites in `assets/`.
 
-It is intentionally **not a full game** yet: **no snake movement, no collisions, no scoring**. We’ll build the actual snake logic during the master class via vibe-coding.
+It includes:
+- Snake movement (arrow keys)
+- Collisions (walls + self)
+- Apples, score, and speed-up as you eat
+- Internal randomly-generated walls
+- Persistent Top-10 high scores saved locally to `scores.json` (enter your name on Game Over)
 
 ## Requirements
 
